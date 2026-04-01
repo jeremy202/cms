@@ -13,6 +13,7 @@ const fieldSchema = z.object({
 const createContentTypeSchema = z.object({
   name: z.string().min(2),
   apiId: z.string().optional(),
+  datasetId: z.string().optional(),
   description: z.string().optional(),
   schema: z.object({ fields: z.array(fieldSchema).min(1) }),
 })

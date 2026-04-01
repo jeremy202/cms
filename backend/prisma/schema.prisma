@@ -20,6 +20,11 @@ enum FieldType {
   RICH_TEXT
 }
 
+enum DatasetVisibility {
+  PUBLIC
+  PRIVATE
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -29,24 +34,42 @@ model User {
   updatedAt    DateTime @updatedAt
 
   contentTypes ContentType[]
+  apiTokens    ApiToken[]
+}
+
+model Dataset {
+  id         String            @id @default(cuid())
+  name       String            @unique
+  visibility DatasetVisibility @default(PRIVATE)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  contentTypes ContentType[]
+  apiTokens    ApiToken[]
 }
 
 model ContentType {
-  id          String               @id @default(cuid())
+  id          String   @id @default(cuid())
   name        String
-  apiId       String               @unique
+  apiId       String
   description String?
-  version     Int                  @default(1)
+  version     Int      @default(1)
   schema      Json
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  datasetId   String
   createdById String
-  createdBy   User                 @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  dataset   Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Cascade)
 
   schemaFields ContentTypeField[]
   entries      Entry[]
 
   @@index([apiId])
+  @@index([datasetId])
+  @@unique([datasetId, apiId])
 }
 
 model ContentTypeField {
@@ -88,4 +111,21 @@ model MediaFile {
   size         Int
   url          String
   createdAt    DateTime @default(now())
+}
+
+model ApiToken {
+  id         String   @id @default(cuid())
+  name       String
+  tokenHash  String   @unique
+  scopes     Json
+  createdAt  DateTime @default(now())
+  revokedAt  DateTime?
+
+  createdById String
+  datasetId   String?
+
+  createdBy User     @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  dataset   Dataset? @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId])
 }

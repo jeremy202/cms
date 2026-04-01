@@ -1,9 +1,18 @@
 const { prisma } = require('../config/prisma')
 const { normalizeApiId, parseSchema } = require('../utils/schema')
+const { ensureDefaultDataset } = require('./dataset.service')
 
-async function listContentTypes() {
+async function listContentTypes(datasetName) {
+  let datasetId = null
+  if (datasetName) {
+    const dataset = await prisma.dataset.findUnique({ where: { name: datasetName } })
+    if (!dataset) return []
+    datasetId = dataset.id
+  }
+
   return prisma.contentType.findMany({
-    include: { schemaFields: true },
+    where: datasetId ? { datasetId } : undefined,
+    include: { schemaFields: true, dataset: true },
     orderBy: { createdAt: 'desc' },
   })
 }
@@ -11,6 +20,12 @@ async function listContentTypes() {
 async function createContentType(userId, payload) {
   const parsed = parseSchema(payload.schema)
   const apiId = payload.apiId ? normalizeApiId(payload.apiId) : normalizeApiId(payload.name)
+
+  const dataset = payload.datasetId
+    ? await prisma.dataset.findUnique({ where: { id: payload.datasetId } })
+    : await ensureDefaultDataset()
+
+  if (!dataset) throw new Error('Dataset not found')
 
   return prisma.$transaction(async (tx) => {
     const created = await tx.contentType.create({
@@ -20,6 +35,7 @@ async function createContentType(userId, payload) {
         description: payload.description,
         schema: parsed.raw,
         createdById: userId,
+        datasetId: dataset.id,
       },
     })
 
@@ -32,7 +48,7 @@ async function createContentType(userId, payload) {
 
     return tx.contentType.findUnique({
       where: { id: created.id },
-      include: { schemaFields: true },
+      include: { schemaFields: true, dataset: true },
     })
   })
 }
@@ -64,7 +80,7 @@ async function updateContentType(contentTypeId, payload) {
 
     return tx.contentType.findUnique({
       where: { id: updated.id },
-      include: { schemaFields: true },
+      include: { schemaFields: true, dataset: true },
     })
   })
 }

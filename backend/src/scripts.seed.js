@@ -8,21 +8,32 @@ async function main() {
   const password = process.env.ADMIN_PASSWORD || 'admin12345'
 
   const existing = await prisma.user.findUnique({ where: { email } })
-  if (existing) {
+  if (!existing) {
+    const passwordHash = await bcrypt.hash(password, 12)
+    await prisma.user.create({
+      data: {
+        email,
+        passwordHash,
+        role: 'ADMIN',
+      },
+    })
+    console.log('Created admin user:', email)
+  } else {
     console.log('Admin already exists:', email)
-    return
   }
 
-  const passwordHash = await bcrypt.hash(password, 12)
-  await prisma.user.create({
-    data: {
-      email,
-      passwordHash,
-      role: 'ADMIN',
-    },
-  })
-
-  console.log('Created admin user:', email)
+  const dataset = await prisma.dataset.findUnique({ where: { name: 'production' } })
+  if (!dataset) {
+    await prisma.dataset.create({
+      data: {
+        name: 'production',
+        visibility: 'PUBLIC',
+      },
+    })
+    console.log('Created default dataset: production')
+  } else {
+    console.log('Dataset already exists: production')
+  }
 }
 
 main()

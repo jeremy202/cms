@@ -33,19 +33,39 @@ function applyQueryOps(entries, query) {
   return output
 }
 
-async function resolveContentType(apiId) {
-  return prisma.contentType.findUnique({
-    where: { apiId },
-    include: { schemaFields: { orderBy: { order: 'asc' } } },
+async function resolveContentType(apiId, datasetName = 'production') {
+  return prisma.contentType.findFirst({
+    where: {
+      apiId,
+      dataset: { name: datasetName },
+    },
+    include: { schemaFields: { orderBy: { order: 'asc' } }, dataset: true },
   })
 }
 
-async function listEntries(apiId, query = {}) {
-  const contentType = await resolveContentType(apiId)
+function canReadFromDataset(deliveryToken, contentType) {
+  if (!contentType?.dataset) return false
+  if (contentType.dataset.visibility === 'PUBLIC') return true
+  if (!deliveryToken) return false
+  if (deliveryToken.datasetId && deliveryToken.datasetId !== contentType.datasetId) return false
+  return Boolean(deliveryToken.scopes?.read)
+}
+
+async function listEntries(apiId, query = {}, options = {}) {
+  const dataset = options.dataset || 'production'
+  const contentType = await resolveContentType(apiId, dataset)
   if (!contentType) throw new Error('Content type not found')
 
+  const isDelivery = Boolean(options.delivery) || options.deliveryMode === true
+  if (isDelivery && !canReadFromDataset(options.delivery, contentType)) {
+    throw new Error('Dataset access denied')
+  }
+
   const all = await prisma.entry.findMany({
-    where: { contentTypeId: contentType.id },
+    where: {
+      contentTypeId: contentType.id,
+      ...(isDelivery ? { published: true } : {}),
+    },
     orderBy: { createdAt: 'desc' },
   })
 
@@ -64,13 +84,14 @@ async function listEntries(apiId, query = {}) {
       pageSize,
       total: filtered.length,
       pageCount: Math.ceil(filtered.length / pageSize) || 1,
+      dataset,
     },
     contentType,
   }
 }
 
-async function createEntry(apiId, payload) {
-  const contentType = await resolveContentType(apiId)
+async function createEntry(apiId, payload, options = {}) {
+  const contentType = await resolveContentType(apiId, options.dataset || 'production')
   if (!contentType) throw new Error('Content type not found')
 
   const data = validateEntryAgainstSchema(contentType.schemaFields, payload.data || {})
@@ -86,18 +107,29 @@ async function createEntry(apiId, payload) {
   return { entry, contentType }
 }
 
-async function getEntry(apiId, id) {
-  const contentType = await resolveContentType(apiId)
+async function getEntry(apiId, id, options = {}) {
+  const contentType = await resolveContentType(apiId, options.dataset || 'production')
   if (!contentType) throw new Error('Content type not found')
 
-  const entry = await prisma.entry.findFirst({ where: { id, contentTypeId: contentType.id } })
+  const isDelivery = Boolean(options.delivery) || options.deliveryMode === true
+  if (isDelivery && !canReadFromDataset(options.delivery, contentType)) {
+    throw new Error('Dataset access denied')
+  }
+
+  const entry = await prisma.entry.findFirst({
+    where: {
+      id,
+      contentTypeId: contentType.id,
+      ...(isDelivery ? { published: true } : {}),
+    },
+  })
   if (!entry) throw new Error('Entry not found')
 
   return { entry, contentType }
 }
 
-async function updateEntry(apiId, id, payload) {
-  const { entry, contentType } = await getEntry(apiId, id)
+async function updateEntry(apiId, id, payload, options = {}) {
+  const { entry, contentType } = await getEntry(apiId, id, options)
   const mergedInput = { ...(entry.data || {}), ...(payload.data || {}) }
   const data = validateEntryAgainstSchema(contentType.schemaFields, mergedInput)
 
@@ -112,9 +144,38 @@ async function updateEntry(apiId, id, payload) {
   return { entry: updated, contentType }
 }
 
-async function deleteEntry(apiId, id) {
-  const { entry } = await getEntry(apiId, id)
+async function deleteEntry(apiId, id, options = {}) {
+  const { entry } = await getEntry(apiId, id, options)
   await prisma.entry.delete({ where: { id: entry.id } })
+}
+
+function projectEntry(entry, projection = []) {
+  if (!projection.length) return entry
+  const obj = {}
+  for (const field of projection) {
+    obj[field] = entry.data?.[field]
+  }
+  obj._id = entry.id
+  obj._createdAt = entry.createdAt
+  obj._updatedAt = entry.updatedAt
+  return obj
+}
+
+async function runSanityLikeQuery(queryString, options = {}) {
+  const query = String(queryString || '').trim()
+  const match = query.match(/^\*\[_type\s*==\s*"([a-zA-Z0-9_-]+)"(?:\s*&&\s*published\s*==\s*true)?\](?:\{([^}]+)\})?$/)
+  if (!match) {
+    throw new Error('Unsupported query format. Use: *[_type=="post"]{title,slug}')
+  }
+
+  const apiId = match[1]
+  const projectionRaw = match[2]
+  const projection = projectionRaw
+    ? projectionRaw.split(',').map((s) => s.trim()).filter(Boolean)
+    : []
+
+  const result = await listEntries(apiId, { page: 1, pageSize: 100, sort: '' }, options)
+  return result.data.map((entry) => projectEntry(entry, projection))
 }
 
 module.exports = {
@@ -123,4 +184,5 @@ module.exports = {
   getEntry,
   updateEntry,
   deleteEntry,
+  runSanityLikeQuery,
 }

@@ -20,12 +20,17 @@ const builder = reactive({
   },
 })
 
+const datasetForm = reactive({ name: '', visibility: 'PRIVATE' })
+const tokenForm = reactive({ name: '', datasetId: '' })
+const latestToken = ref('')
+
 const entryForm = ref({})
 const query = reactive({ page: 1, pageSize: 20, sort: '', filterField: '', filterValue: '' })
 const uploadResult = ref(null)
 
 const selectedType = computed(() => content.selectedType)
 const canManageTypes = computed(() => auth.user?.role === 'ADMIN')
+const selectedDataset = computed(() => content.datasets.find((d) => d.name === content.selectedDataset) || null)
 
 function addField() {
   builder.schema.fields.push({
@@ -49,6 +54,26 @@ async function createType() {
   builder.apiId = ''
   builder.description = ''
   builder.schema.fields = [{ name: 'title', displayName: 'Title', type: 'TEXT', required: true, unique: false, options: {}, order: 0 }]
+}
+
+async function createDataset() {
+  const created = await content.createDataset(datasetForm)
+  datasetForm.name = ''
+  datasetForm.visibility = 'PRIVATE'
+  content.selectedDataset = created.name
+  await reloadAllForDataset()
+}
+
+async function createToken() {
+  latestToken.value = ''
+  const token = await content.createToken({
+    name: tokenForm.name,
+    datasetId: tokenForm.datasetId || undefined,
+    scopes: { read: true },
+  })
+  latestToken.value = token.rawToken
+  tokenForm.name = ''
+  tokenForm.datasetId = ''
 }
 
 async function selectType(type) {
@@ -87,11 +112,20 @@ async function uploadFile(event) {
   uploadResult.value = data
 }
 
-onMounted(async () => {
+async function reloadAllForDataset() {
   await content.fetchContentTypes()
   if (content.selectedType) {
     await content.fetchEntries(content.selectedType.apiId)
+  } else {
+    content.entries = []
   }
+}
+
+onMounted(async () => {
+  await content.fetchDatasets()
+  await content.fetchTokens()
+  tokenForm.datasetId = content.datasets[0]?.id || ''
+  await reloadAllForDataset()
 })
 </script>
 
@@ -100,8 +134,32 @@ onMounted(async () => {
     <div class="grid gap-4 lg:grid-cols-3">
       <section class="space-y-4 lg:col-span-1">
         <article class="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 class="text-lg font-semibold">Datasets</h2>
+          <p class="mt-1 text-sm text-slate-500">Sanity-style environments like production/staging.</p>
+
+          <select
+            v-model="content.selectedDataset"
+            class="mt-3 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            @change="reloadAllForDataset"
+          >
+            <option v-for="dataset in content.datasets" :key="dataset.id" :value="dataset.name">
+              {{ dataset.name }} ({{ dataset.visibility }})
+            </option>
+          </select>
+
+          <form v-if="canManageTypes" class="mt-3 grid gap-2" @submit.prevent="createDataset">
+            <input v-model="datasetForm.name" class="rounded border border-slate-300 px-3 py-2" placeholder="new dataset name" required />
+            <select v-model="datasetForm.visibility" class="rounded border border-slate-300 px-3 py-2">
+              <option value="PRIVATE">PRIVATE</option>
+              <option value="PUBLIC">PUBLIC</option>
+            </select>
+            <button class="rounded bg-slate-900 px-3 py-2 text-white">Create dataset</button>
+          </form>
+        </article>
+
+        <article class="rounded-lg border border-slate-200 bg-white p-4">
           <h2 class="text-lg font-semibold">Content Types</h2>
-          <p class="mt-1 text-sm text-slate-500">Schemas are stored as JSON and versioned.</p>
+          <p class="mt-1 text-sm text-slate-500">Schemas are scoped to dataset: <strong>{{ content.selectedDataset }}</strong></p>
 
           <div class="mt-3 space-y-2">
             <button
@@ -149,6 +207,36 @@ onMounted(async () => {
             <button class="w-full rounded bg-slate-900 px-3 py-2 text-white">Create content type</button>
           </form>
         </article>
+
+        <article v-if="canManageTypes" class="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 class="text-lg font-semibold">Delivery API Tokens</h2>
+          <p class="mt-1 text-sm text-slate-500">Generate read tokens for website integration.</p>
+
+          <form class="mt-3 grid gap-2" @submit.prevent="createToken">
+            <input v-model="tokenForm.name" class="rounded border border-slate-300 px-3 py-2" placeholder="token name" required />
+            <select v-model="tokenForm.datasetId" class="rounded border border-slate-300 px-3 py-2">
+              <option value="">All datasets</option>
+              <option v-for="dataset in content.datasets" :key="dataset.id" :value="dataset.id">{{ dataset.name }}</option>
+            </select>
+            <button class="rounded bg-slate-900 px-3 py-2 text-white">Create token</button>
+          </form>
+
+          <p v-if="latestToken" class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-800 break-all">
+            Save this token now (shown once): {{ latestToken }}
+          </p>
+
+          <ul class="mt-3 space-y-2 text-sm">
+            <li v-for="token in content.deliveryTokens" :key="token.id" class="rounded border border-slate-200 bg-slate-50 p-2">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <div class="font-medium">{{ token.name }}</div>
+                  <div class="text-xs text-slate-500">dataset: {{ token.dataset?.name || 'all' }}</div>
+                </div>
+                <button class="rounded bg-red-100 px-2 py-1 text-xs text-red-700" @click="content.revokeToken(token.id)">Revoke</button>
+              </div>
+            </li>
+          </ul>
+        </article>
       </section>
 
       <section class="space-y-4 lg:col-span-2">
@@ -165,6 +253,13 @@ onMounted(async () => {
               <input v-model="query.filterValue" class="rounded border border-slate-300 px-2 py-1 text-sm" placeholder="filter value" />
               <input v-model="query.sort" class="rounded border border-slate-300 px-2 py-1 text-sm" placeholder="sort e.g. title:asc" />
               <button class="rounded bg-slate-100 px-3 py-1 text-sm" @click="applyQuery">Apply query</button>
+            </div>
+
+            <div class="rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+              <p class="font-medium">Website integration endpoint</p>
+              <p class="mt-1 font-mono break-all">GET /api/delivery/{{ content.selectedDataset }}/{{ selectedType.apiId }}</p>
+              <p class="mt-1 font-mono break-all">GET /api/delivery/query?dataset={{ content.selectedDataset }}&query=*[_type=="{{ selectedType.apiId }}"]{title}</p>
+              <p class="mt-1 text-slate-500">Use Authorization: Bearer &lt;delivery_token&gt; for private datasets.</p>
             </div>
 
             <div class="space-y-2">

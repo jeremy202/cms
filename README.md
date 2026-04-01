@@ -1,221 +1,122 @@
-# Headless CMS Platform (Strapi-like MVP)
+# Headless CMS Platform (Sanity-like MVP)
 
-A production-oriented, modular headless CMS built from scratch.
+A production-oriented, modular headless CMS inspired by Strapi + Sanity workflows.
 
 - Backend: Node.js + Express + Prisma + PostgreSQL
 - Admin: Vue 3 + Pinia + Vue Router + Tailwind
 - Auth: JWT + RBAC
-- Media: Multer local upload (cloud-ready abstraction)
+- Delivery: dataset-aware content API + API tokens
+- Media: Multer upload (local disk)
 
 ---
 
-## 1) System architecture
+## What makes this work like Sanity
 
-### High-level architecture
+This implementation includes Sanity-style website integration primitives:
+
+1. **Datasets** (`production`, `staging`, etc.)
+2. **Delivery tokens** for private dataset reads
+3. **Published-only delivery API**
+4. **Sanity-like query endpoint** (`/api/delivery/query?...`)
+5. **Content-type builder + dynamic entries**
+
+You can now plug your website directly into delivery endpoints and update site content from admin.
+
+---
+
+## Architecture
 
 ```text
-[ Vue Admin (SPA) ]
+[ Vue Admin ] ---> [ Authoring API (/api/*) ] ---> [ Prisma ] ---> [ PostgreSQL ]
+        |                    |
+        |                    +--> content types, entries, datasets, tokens
         |
-        | HTTP/JSON + JWT
-        v
-[ Express API Layer ]
-  - Auth & RBAC middleware
-  - Content Type Builder API
-  - Dynamic Entry API Generator
-  - Media Upload API
-        |
-        v
-[ Service Layer ]
-  - AuthService
-  - ContentTypeService
-  - EntryService
-  - MediaService
-        |
-        v
-[ Prisma ORM ] ---> [ PostgreSQL ]
-```
+        +--> upload/media
 
-### Architectural decisions
-
-- **MVP storage strategy**: single `Entry` table with `data JSON`.
-- **Why**: fast iteration, schema agility, no runtime migrations per content type.
-- **API generation**: generic route controller resolving `:contentType` -> schema -> CRUD behavior.
-- **RBAC**:
-  - Admin: content-type builder + full CRUD + delete.
-  - Editor: content CRUD, media upload.
-  - Public: read-only dynamic GET endpoints (if desired; currently unauthenticated reads are enabled for dynamic GET).
-
----
-
-## 2) Database schema design
-
-Prisma models:
-
-- `User`: email, passwordHash, role (`ADMIN`, `EDITOR`)
-- `ContentType`: name, apiId, version, schema(JSON), createdBy
-- `ContentTypeField`: normalized field definitions for builder and UI form generation
-- `Entry`: contentTypeId + `data` (JSON) + publish state
-- `MediaFile`: uploaded file metadata and URL
-
-### MVP dynamic data option tradeoff
-
-#### Option A (implemented): single `entries` table + JSON
-
-**Pros**
-- no runtime DDL
-- supports schema edits/versioning easily
-- simplest API generator
-- best MVP speed
-
-**Cons**
-- weaker DB-level constraints/indexing per custom field
-- complex filtering at scale
-- limited relational integrity on dynamic keys
-
-#### Option B (advanced): generate tables per content type
-
-**Pros**
-- strong SQL constraints/indexes
-- faster field-level querying at scale
-- cleaner relational joins
-
-**Cons**
-- runtime migrations and deployment complexity
-- harder rollbacks/version compatibility
-- significantly higher operational risk
-
-Recommendation: ship Option A first, evolve hot content types to Option B later.
-
----
-
-## 3) Step-by-step implementation plan
-
-1. **Foundation**
-   - Setup Express, Prisma, Postgres, env config
-   - Add security middleware: Helmet, CORS, rate limit
-2. **Auth + RBAC**
-   - Register/login endpoints, JWT issue/verify
-   - Role middleware (`authorize`)
-3. **Content Type Builder**
-   - Create/list/update content types
-   - Persist schema JSON and normalized fields
-   - Version bump on schema edits
-4. **Dynamic Entry Engine**
-   - Generic CRUD for `/:contentType`
-   - Runtime validation against stored schema
-   - Pagination/filter/sort
-5. **Media**
-   - Upload endpoint (Multer)
-   - Persist file metadata
-6. **Admin SPA**
-   - Auth pages
-   - Builder UI
-   - Dynamic form renderer
-   - Content CRUD pages
-   - Media upload UI
-7. **Hardening**
-   - Add audit logs, tests, background jobs
-   - add caching, search index, and observability
-
----
-
-## 4) Folder structure
-
-```text
-/backend
-  /prisma
-    schema.prisma
-  /src
-    /config
-    /controllers
-    /middleware
-    /routes
-    /services
-    /utils
-    /validators
-    app.js
-    server.js
-
-/admin
-  /src
-    /api
-    /components
-    /layouts
-    /pages
-    /router
-    /stores
+[ Website Frontend ] ---> [ Delivery API (/api/delivery/*) ]
+                          - dataset-aware
+                          - published-only
+                          - API token support
 ```
 
 ---
 
-## 5) Key code examples
+## Data model (MVP)
 
-### A) Dynamic content-type creation
+- `User` (ADMIN / EDITOR)
+- `Dataset` (name, PUBLIC/PRIVATE)
+- `ContentType` (schema JSON, version, dataset-scoped)
+- `ContentTypeField` (normalized fields)
+- `Entry` (JSON data + published flag)
+- `ApiToken` (hashed token + scopes + optional dataset scope)
+- `MediaFile` (uploads metadata)
 
-- Endpoint: `POST /api/content-types`
-- Validates schema
-- Stores JSON + normalized `ContentTypeField[]`
+---
 
-See:
-- `backend/src/controllers/contentType.controller.js`
-- `backend/src/services/contentType.service.js`
+## Dynamic APIs
 
-### B) Auto API generator
-
-Generic routes:
-
-- `POST /api/:contentType`
-- `GET /api/:contentType`
-- `GET /api/:contentType/:id`
-- `PUT /api/:contentType/:id`
-- `DELETE /api/:contentType/:id`
-
-Handled by:
-- `backend/src/routes/dynamic.routes.js`
-- `backend/src/controllers/entries.controller.js`
-- `backend/src/services/entry.service.js`
-
-### C) Auth system
+### Authoring APIs
 
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 
-Files:
-- `backend/src/controllers/auth.controller.js`
-- `backend/src/services/auth.service.js`
-- `backend/src/middleware/auth.middleware.js`
+- `GET /api/datasets`
+- `POST /api/datasets` (ADMIN)
+- `GET /api/datasets/tokens` (ADMIN)
+- `POST /api/datasets/tokens` (ADMIN)
+- `DELETE /api/datasets/tokens/:id` (ADMIN)
 
-### D) Vue dynamic form rendering
+- `GET /api/content-types?dataset=production`
+- `POST /api/content-types` (ADMIN)
+- `PUT /api/content-types/:id` (ADMIN)
 
-`DynamicEntryForm.vue` renders fields based on schema metadata (type-driven inputs).
+- `POST /api/:contentType?dataset=production`
+- `GET /api/:contentType?dataset=production`
+- `GET /api/:contentType/:id?dataset=production`
+- `PUT /api/:contentType/:id?dataset=production`
+- `DELETE /api/:contentType/:id?dataset=production`
 
-File:
-- `admin/src/components/DynamicEntryForm.vue`
+### Delivery APIs (website-facing)
+
+- `GET /api/delivery/:dataset/:contentType`
+- `GET /api/delivery/:dataset/:contentType/:id`
+- `GET /api/delivery/query?dataset=production&query=*[_type=="post"]{title,slug}`
+
+Behavior:
+- returns **published-only** entries
+- PUBLIC dataset: no token required
+- PRIVATE dataset: requires `Authorization: Bearer <delivery_token>`
 
 ---
 
-## 6) Best practices for scaling
+## Website integration example
 
-1. **Schema governance**
-   - Add migration plans between content-type versions
-   - Lock schema changes in production with approval flow
-2. **Query performance**
-   - Add JSONB indexes for hot fields
-   - Move high-traffic types to generated SQL tables (hybrid model)
-3. **Security**
-   - refresh tokens + rotation
-   - password reset, email verification, 2FA
-   - per-route permission matrix (type + action)
-4. **Media scalability**
-   - move to S3/R2/GCS adapters
-   - async image processing + CDN URLs
-5. **Observability**
-   - structured logs, tracing, metrics, error alerts
-6. **Reliability**
-   - queue-based async jobs
-   - backups + PITR
-   - zero-downtime migrations
+### Fetch list of posts
+
+```js
+const res = await fetch('http://localhost:4000/api/delivery/production/post')
+const json = await res.json()
+console.log(json.data)
+```
+
+### Fetch private dataset with token
+
+```js
+const res = await fetch('http://localhost:4000/api/delivery/staging/post', {
+  headers: {
+    Authorization: `Bearer ${process.env.CMS_DELIVERY_TOKEN}`,
+  },
+})
+```
+
+### Sanity-like query endpoint
+
+```js
+const query = encodeURIComponent('*[_type=="post"]{title,slug}')
+const res = await fetch(`http://localhost:4000/api/delivery/query?dataset=production&query=${query}`)
+const { result } = await res.json()
+```
 
 ---
 
@@ -225,7 +126,6 @@ File:
 
 ```bash
 cd backend
-cp .env .env.local # optional
 npm install
 npm run generate
 npm run migrate
@@ -233,7 +133,7 @@ npm run seed
 npm run dev
 ```
 
-Backend default: `http://localhost:4000`
+Backend: `http://localhost:4000`
 
 ### Admin
 
@@ -243,25 +143,31 @@ npm install
 npm run dev
 ```
 
-Admin default: `http://localhost:5173`
+Admin: `http://localhost:5173`
 
 ---
 
-## API quick reference
+## Option A vs B (dynamic storage)
 
-- Auth
-  - `POST /api/auth/register`
-  - `POST /api/auth/login`
-  - `GET /api/auth/me`
-- Builder
-  - `GET /api/content-types`
-  - `POST /api/content-types` (ADMIN)
-  - `PUT /api/content-types/:id` (ADMIN)
-- Dynamic entries
-  - `POST /api/:contentType`
-  - `GET /api/:contentType`
-  - `GET /api/:contentType/:id`
-  - `PUT /api/:contentType/:id`
-  - `DELETE /api/:contentType/:id`
-- Media
-  - `POST /api/media`
+### Option A (implemented)
+- one `Entry` table with JSON data
+- fastest MVP, schema-flexible
+- easier auto API generation
+
+### Option B (future)
+- generated SQL table per content type
+- better indexing/perf for high-scale types
+- higher migration and ops complexity
+
+Recommendation: keep Option A for most types, migrate hot types to Option B gradually.
+
+---
+
+## Scaling best practices
+
+- add JSONB indexes for high-query fields
+- add audit logs + revision history per entry
+- add preview/draft overlays per environment
+- add CDN-backed media storage (S3/R2)
+- add granular permissions per content type and action
+- add request tracing and error monitoring

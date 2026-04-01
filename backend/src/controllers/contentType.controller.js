@@ -7,7 +7,7 @@ const {
 
 async function list(req, res, next) {
   try {
-    const types = await listContentTypes()
+    const types = await listContentTypes(req.query.dataset)
     return res.json(types)
   } catch (err) {
     return next(err)
