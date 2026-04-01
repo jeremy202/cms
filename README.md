@@ -171,3 +171,30 @@ Recommendation: keep Option A for most types, migrate hot types to Option B grad
 - add CDN-backed media storage (S3/R2)
 - add granular permissions per content type and action
 - add request tracing and error monitoring
+
+---
+
+## Test website (integration demo)
+
+A ready-to-run demo website is included in `website/`.
+
+### Run
+
+```bash
+cd website
+npm install
+npm run dev
+```
+
+URL: `http://localhost:5174`
+
+This website can consume:
+
+- `GET /api/delivery/:dataset/:contentType`
+- `GET /api/delivery/query?dataset=...&query=*[_type=="post"]{title,slug}`
+
+It includes:
+- dataset switcher
+- content type mode vs query mode
+- optional delivery token input for private datasets
+- rendered cards + raw JSON payload preview
