@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Website CMS{% endblock %}
+{% block content %}
+<section class="grid two-col">
+  <article class="card">
+    <h2>Websites</h2>
+    {% if websites %}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Domain</th>
+            <th>Status</th>
+            <th>Pages</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for site in websites %}
+            <tr>
+              <td>{{ site.name }}</td>
+              <td><a href="https://{{ site.domain }}" target="_blank" rel="noreferrer">{{ site.domain }}</a></td>
+              <td><span class="status {{ site.status }}">{{ site.status }}</span></td>
+              <td>{{ site.page_count }}</td>
+              <td class="actions">
+                <a href="{{ url_for('pages_for_website', website_id=site.id) }}">Pages</a>
+                <a href="{{ url_for('edit_website_form', website_id=site.id) }}">Edit</a>
+                <form action="{{ url_for('delete_website', website_id=site.id) }}" method="post">
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No websites yet. Create your first one to get started.</p>
+    {% endif %}
+  </article>
+
+  <article class="card">
+    <h2>Recently Updated Pages</h2>
+    {% if recent_pages %}
+      <ul class="list">
+        {% for page in recent_pages %}
+          <li>
+            <strong>{{ page.title }}</strong>
+            <span>{{ page.website_name }}</span>
+            <code>/{{ page.slug }}</code>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No pages yet.</p>
+    {% endif %}
+  </article>
+</section>
+{% endblock %}

@@ -1,0 +1,17 @@
+[project]
+name = "website-management-cms"
+version = "0.1.0"
+description = "CMS for managing websites and their pages"
+requires-python = ">=3.10"
+dependencies = [
+  "Flask>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
