@@ -96,7 +96,7 @@ def test_page_markdown_and_preview(client):
             "title": "Guide",
             "slug": "guide",
             "seo_description": "Guide page",
-            "content_markdown": "# Heading\\n\\n**bold** and [link](https://example.com)",
+            "content_markdown": "# Heading\n\n**bold** and [link](https://example.com)",
             "published": "on",
         },
         follow_redirects=True,
