@@ -1,51 +1,69 @@
 # Website Management CMS
 
-A lightweight CMS to manage all websites you have built, with per-site page management.
+A lightweight multi-user CMS to manage all websites you have built, including pages, deployments, tags, and markdown content.
 
 ## Features
 
-- Website registry (name, domain, stack, status)
-- Per-website page management (title, slug, SEO description, published)
-- Dashboard with page counts and recent page updates
-- JSON API endpoints:
+- Multi-user authentication (register, login, logout)
+- Website registry scoped per user
+  - fields: name, domain, tech stack, status, tags
+- Per-website page management
+  - title, slug, SEO description, published status
+  - markdown content editor + rendered preview page
+- Deployment tracking per website
+  - providers: Vercel or Netlify
+  - production/preview URL, branch, status
+- Search / filter / sort on dashboard
+  - query by name/domain/stack
+  - filter by status or tag
+  - sort by recency/name/page count
+- JSON API endpoints (authenticated)
   - `GET /api/websites`
   - `GET /api/websites/<website_id>/pages`
-- SQLite storage (zero external database setup)
+  - `GET /api/websites/<website_id>/deployments`
 
 ## Tech Stack
 
 - Python 3.10+
 - Flask 3+
 - SQLite
+- Markdown + Bleach (safe rendering)
 - Pytest
 
 ## Run locally
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
 python app.py
 ```
 
-Then open `http://127.0.0.1:5000`.
+Open `http://127.0.0.1:5000` and create a user account.
 
 ## Run tests
 
 ```bash
 pip install -e .[dev]
-pytest
+python3 -m pytest
 ```
 
 ## Data model
 
+### users
+
+- `id`
+- `username` (unique)
+- `password_hash`
+- `role`
+- `created_at`
+
 ### websites
 
 - `id`
+- `owner_id` (FK -> users.id)
 - `name`
 - `domain` (unique)
 - `tech_stack`
-- `status` (`active`, `maintenance`, `archived`)
+- `status`
 - `created_at`
 
 ### pages
@@ -55,13 +73,23 @@ pytest
 - `title`
 - `slug` (unique per website)
 - `seo_description`
-- `published` (boolean)
+- `content_markdown`
+- `published`
 - `updated_at`
 
-## Next improvements (optional)
+### deployments
 
-- Multi-user auth and roles
-- Rich text editor for page content
-- Search/filter/sort on dashboard
-- Deploy targets per website (e.g. Netlify/Vercel metadata)
-- Backups and import/export
+- `id`
+- `website_id` (FK -> websites.id)
+- `provider` (`vercel`/`netlify`)
+- `project_name`
+- `production_url`
+- `preview_url`
+- `branch`
+- `status`
+- `updated_at`
+
+### tags
+
+- `tags` table for unique tags
+- `website_tags` join table for many-to-many website tagging

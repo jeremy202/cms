@@ -1,10 +1,12 @@
 [project]
 name = "website-management-cms"
-version = "0.1.0"
-description = "CMS for managing websites and their pages"
+version = "0.2.0"
+description = "CMS for managing websites, pages, deployments, and users"
 requires-python = ">=3.10"
 dependencies = [
   "Flask>=3.0.0",
+  "Markdown>=3.7",
+  "bleach>=6.2.0",
 ]
 
 [project.optional-dependencies]

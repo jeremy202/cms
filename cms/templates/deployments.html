@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Deployments · {{ website.name }}{% endblock %}
+{% block content %}
+<article class="card">
+  <div class="row between">
+    <h2>{{ website.name }} deployments</h2>
+    <a class="button secondary" href="{{ url_for('pages_for_website', website_id=website.id) }}">Back to pages</a>
+  </div>
+
+  <h3>Add deployment</h3>
+  <form method="post" action="{{ url_for('create_deployment', website_id=website.id) }}" class="deployment-grid">
+    <label>
+      Provider
+      <select name="provider">
+        <option value="vercel">vercel</option>
+        <option value="netlify">netlify</option>
+      </select>
+    </label>
+
+    <label>
+      Project name
+      <input type="text" name="project_name" required />
+    </label>
+
+    <label>
+      Production URL
+      <input type="text" name="production_url" placeholder="https://example.com" />
+    </label>
+
+    <label>
+      Preview URL
+      <input type="text" name="preview_url" placeholder="https://preview.example.com" />
+    </label>
+
+    <label>
+      Branch
+      <input type="text" name="branch" placeholder="main" />
+    </label>
+
+    <label>
+      Status
+      <select name="status">
+        <option value="active">active</option>
+        <option value="paused">paused</option>
+        <option value="error">error</option>
+      </select>
+    </label>
+
+    <button type="submit">Save deployment</button>
+  </form>
+
+  <h3>Saved deployments</h3>
+  {% if deployments %}
+    <table>
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Project</th>
+          <th>Production</th>
+          <th>Preview</th>
+          <th>Branch</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for deployment in deployments %}
+          <tr>
+            <td>{{ deployment.provider }}</td>
+            <td>{{ deployment.project_name }}</td>
+            <td>
+              {% if deployment.production_url %}
+                <a href="{{ deployment.production_url }}" target="_blank" rel="noreferrer">open</a>
+              {% else %}
+                <span class="muted">n/a</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if deployment.preview_url %}
+                <a href="{{ deployment.preview_url }}" target="_blank" rel="noreferrer">open</a>
+              {% else %}
+                <span class="muted">n/a</span>
+              {% endif %}
+            </td>
+            <td>{{ deployment.branch or '-' }}</td>
+            <td><span class="status {{ deployment.status }}">{{ deployment.status }}</span></td>
+            <td class="actions">
+              <a href="{{ url_for('edit_deployment_form', deployment_id=deployment.id) }}">Edit</a>
+              <form action="{{ url_for('delete_deployment', deployment_id=deployment.id) }}" method="post">
+                <button class="danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No deployments yet.</p>
+  {% endif %}
+</article>
+{% endblock %}

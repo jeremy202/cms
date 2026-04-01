@@ -21,9 +21,14 @@
     </label>
 
     <label>
+      Tags (comma separated)
+      <input type="text" name="tags" placeholder="portfolio, client-work" value="{{ tag_text or '' }}" />
+    </label>
+
+    <label>
       Status
+      {% set current_status = website.status if website and website.status else 'active' %}
       <select name="status">
-        {% set current_status = website.status if website and website.status else 'active' %}
         <option value="active" {% if current_status == 'active' %}selected{% endif %}>active</option>
         <option value="maintenance" {% if current_status == 'maintenance' %}selected{% endif %}>maintenance</option>
         <option value="archived" {% if current_status == 'archived' %}selected{% endif %}>archived</option>

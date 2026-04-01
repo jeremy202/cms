@@ -17,7 +17,12 @@
 
     <label>
       SEO Description
-      <textarea name="seo_description" rows="4">{{ page.seo_description if page else '' }}</textarea>
+      <textarea name="seo_description" rows="3">{{ page.seo_description if page else '' }}</textarea>
+    </label>
+
+    <label>
+      Content (Markdown)
+      <textarea name="content_markdown" rows="14" class="code-textarea" placeholder="# Heading\n\nWrite markdown content...">{{ page.content_markdown if page else '' }}</textarea>
     </label>
 
     <label class="inline">

@@ -9,9 +9,18 @@
   <body>
     <header class="header">
       <div class="container">
-        <h1><a href="{{ url_for('dashboard') }}">Website Management CMS</a></h1>
-        <nav>
-          <a class="button" href="{{ url_for('new_website_form') }}">+ New Website</a>
+        <h1><a href="{{ url_for('dashboard') if g.user else url_for('login') }}">Website Management CMS</a></h1>
+        <nav class="actions">
+          {% if g.user %}
+            <span class="chip">{{ g.user.username }} ({{ g.user.role }})</span>
+            <a class="button" href="{{ url_for('new_website_form') }}">+ New Website</a>
+            <form action="{{ url_for('logout') }}" method="post">
+              <button type="submit" class="button secondary">Logout</button>
+            </form>
+          {% else %}
+            <a class="button secondary" href="{{ url_for('login') }}">Login</a>
+            <a class="button" href="{{ url_for('register') }}">Register</a>
+          {% endif %}
         </nav>
       </div>
     </header>
