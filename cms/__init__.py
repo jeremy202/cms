@@ -226,6 +226,8 @@ def login_required(view: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(view)
     def wrapped_view(**kwargs: Any) -> Any:
         if g.user is None:
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "authentication required"}), 401
             return redirect(url_for("login", next=request.path))
         return view(**kwargs)
 
@@ -243,6 +245,19 @@ def parse_tags(raw_tags: str) -> list[str]:
     return tags
 
 
+def normalize_tags_input(raw_tags: Any) -> list[str]:
+    if isinstance(raw_tags, list):
+        tags: list[str] = []
+        seen: set[str] = set()
+        for item in raw_tags:
+            cleaned = str(item).strip().lower()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                tags.append(cleaned)
+        return tags
+    return parse_tags(str(raw_tags or ""))
+
+
 def set_website_tags(website_id: int, tags: list[str]) -> None:
     db = get_db()
     db.execute("DELETE FROM website_tags WHERE website_id = ?", (website_id,))
@@ -256,6 +271,29 @@ def set_website_tags(website_id: int, tags: list[str]) -> None:
             tag_id = row[0]
         db.execute("INSERT OR IGNORE INTO website_tags (website_id, tag_id) VALUES (?, ?)", (website_id, tag_id))
     db.commit()
+
+
+def website_with_counts(website_id: int, owner_id: int) -> dict[str, Any] | None:
+    row = query_db(
+        """
+        SELECT
+            w.*,
+            COUNT(DISTINCT p.id) AS page_count,
+            COUNT(DISTINCT d.id) AS deployment_count
+        FROM websites w
+        LEFT JOIN pages p ON p.website_id = w.id
+        LEFT JOIN deployments d ON d.website_id = w.id
+        WHERE w.id = ? AND w.owner_id = ?
+        GROUP BY w.id
+        """,
+        (website_id, owner_id),
+        one=True,
+    )
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["tags"] = get_website_tags(website_id)
+    return payload
 
 
 def get_website_tags(website_id: int) -> list[str]:
@@ -328,17 +366,32 @@ def register_routes(app: Flask) -> None:
             return
         g.user = query_db("SELECT * FROM users WHERE id = ?", (user_id,), one=True)
 
+    def _read_request_data() -> dict[str, Any]:
+        if request.is_json:
+            payload = request.get_json(silent=True)
+            if isinstance(payload, dict):
+                return payload
+            return {}
+        return {key: value for key, value in request.form.items()}
+
+    def _wants_json_response() -> bool:
+        accept = request.headers.get("Accept", "")
+        return request.is_json or request.path.startswith("/api/") or "application/json" in accept
+
     @app.get("/auth/register")
     def register() -> str:
         return render_template("register.html")
 
     @app.post("/auth/register")
     def register_post() -> Any:
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        role = request.form.get("role", "editor").strip() or "editor"
+        data = _read_request_data()
+        username = str(data.get("username", "")).strip()
+        password = str(data.get("password", ""))
+        role = str(data.get("role", "editor")).strip() or "editor"
 
         if len(username) < 3 or len(password) < 8:
+            if _wants_json_response():
+                return jsonify({"error": "Username must be >= 3 chars and password >= 8 chars."}), 400
             flash("Username must be >= 3 chars and password >= 8 chars.", "error")
             return render_template("register.html"), 400
 
@@ -348,11 +401,15 @@ def register_routes(app: Flask) -> None:
                 (username, generate_password_hash(password), role),
             )
         except sqlite3.IntegrityError:
+            if _wants_json_response():
+                return jsonify({"error": "Username already exists."}), 400
             flash("Username already exists.", "error")
             return render_template("register.html"), 400
 
         session.clear()
         session["user_id"] = user_id
+        if _wants_json_response():
+            return jsonify({"id": user_id, "username": username, "role": role}), 201
         flash("Account created and signed in.", "success")
         return redirect(url_for("dashboard"))
 
@@ -362,16 +419,21 @@ def register_routes(app: Flask) -> None:
 
     @app.post("/auth/login")
     def login_post() -> Any:
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
+        data = _read_request_data()
+        username = str(data.get("username", "")).strip()
+        password = str(data.get("password", ""))
         user = query_db("SELECT * FROM users WHERE username = ?", (username,), one=True)
 
         if user is None or not check_password_hash(user["password_hash"], password):
+            if _wants_json_response():
+                return jsonify({"error": "Invalid credentials."}), 400
             flash("Invalid credentials.", "error")
             return render_template("login.html"), 400
 
         session.clear()
         session["user_id"] = user["id"]
+        if _wants_json_response():
+            return jsonify({"id": user["id"], "username": user["username"], "role": user["role"]})
         flash("Logged in.", "success")
         next_path = request.args.get("next")
         if next_path:
@@ -381,8 +443,15 @@ def register_routes(app: Flask) -> None:
     @app.post("/auth/logout")
     def logout() -> Any:
         session.clear()
+        if _wants_json_response():
+            return jsonify({"ok": True})
         flash("Logged out.", "success")
         return redirect(url_for("login"))
+
+    @app.get("/api/me")
+    @login_required
+    def api_me() -> Any:
+        return jsonify({"id": g.user["id"], "username": g.user["username"], "role": g.user["role"]})
 
     @app.get("/")
     @login_required
@@ -786,8 +855,37 @@ def register_routes(app: Flask) -> None:
     @app.get("/api/websites")
     @login_required
     def api_websites() -> Any:
+        q = request.args.get("q", "").strip()
+        status_filter = request.args.get("status", "all").strip()
+        tag_filter = request.args.get("tag", "all").strip().lower()
+        sort_key = request.args.get("sort", "newest").strip()
+
+        sort_map = {
+            "newest": "w.created_at DESC",
+            "oldest": "w.created_at ASC",
+            "name_asc": "w.name COLLATE NOCASE ASC",
+            "name_desc": "w.name COLLATE NOCASE DESC",
+            "pages_desc": "page_count DESC, w.created_at DESC",
+        }
+        sort_sql = sort_map.get(sort_key, sort_map["newest"])
+
+        where_clauses = ["w.owner_id = ?"]
+        args: list[Any] = [g.user["id"]]
+        if q:
+            where_clauses.append("(w.name LIKE ? OR w.domain LIKE ? OR IFNULL(w.tech_stack, '') LIKE ?)")
+            like = f"%{q}%"
+            args.extend([like, like, like])
+        if status_filter != "all":
+            where_clauses.append("w.status = ?")
+            args.append(status_filter)
+        if tag_filter != "all":
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM website_tags wtf JOIN tags tf ON tf.id = wtf.tag_id WHERE wtf.website_id = w.id AND tf.name = ?)"
+            )
+            args.append(tag_filter)
+
         websites = query_db(
-            """
+            f"""
             SELECT
                 w.*,
                 COUNT(DISTINCT p.id) AS page_count,
@@ -798,11 +896,11 @@ def register_routes(app: Flask) -> None:
             LEFT JOIN deployments d ON d.website_id = w.id
             LEFT JOIN website_tags wt ON wt.website_id = w.id
             LEFT JOIN tags t ON t.id = wt.tag_id
-            WHERE w.owner_id = ?
+            WHERE {" AND ".join(where_clauses)}
             GROUP BY w.id
-            ORDER BY w.created_at DESC
+            ORDER BY {sort_sql}
             """,
-            (g.user["id"],),
+            tuple(args),
         )
 
         payload = []
@@ -811,6 +909,73 @@ def register_routes(app: Flask) -> None:
             item["tags"] = item.pop("tags_csv", "").split(",") if item.get("tags_csv") else []
             payload.append(item)
         return jsonify(payload)
+
+    @app.post("/api/websites")
+    @login_required
+    def api_create_website() -> Any:
+        data = _read_request_data()
+        name = str(data.get("name", "")).strip()
+        domain = str(data.get("domain", "")).strip()
+        tech_stack = str(data.get("tech_stack", "")).strip()
+        status = str(data.get("status", "active")).strip() or "active"
+        tag_text = str(data.get("tags", "")).strip()
+
+        if not name or not domain:
+            return jsonify({"error": "name and domain are required"}), 400
+
+        try:
+            website_id = execute_db(
+                "INSERT INTO websites (owner_id, name, domain, tech_stack, status) VALUES (?, ?, ?, ?, ?)",
+                (g.user["id"], name, domain, tech_stack, status),
+            )
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "domain already exists"}), 400
+
+        set_website_tags(website_id, parse_tags(tag_text))
+        website = query_db("SELECT * FROM websites WHERE id = ?", (website_id,), one=True)
+        payload = dict(website)
+        payload["tags"] = get_website_tags(website_id)
+        return jsonify(payload), 201
+
+    @app.put("/api/websites/<int:website_id>")
+    @login_required
+    def api_update_website(website_id: int) -> Any:
+        website = get_owned_website(website_id)
+        if website is None:
+            return jsonify({"error": "website not found"}), 404
+
+        data = _read_request_data()
+        name = str(data.get("name", website["name"])).strip()
+        domain = str(data.get("domain", website["domain"])).strip()
+        tech_stack = str(data.get("tech_stack", website["tech_stack"] or "")).strip()
+        status = str(data.get("status", website["status"])).strip() or website["status"]
+        tag_text = str(data.get("tags", ", ".join(get_website_tags(website_id)))).strip()
+
+        if not name or not domain:
+            return jsonify({"error": "name and domain are required"}), 400
+
+        try:
+            execute_db(
+                "UPDATE websites SET name = ?, domain = ?, tech_stack = ?, status = ? WHERE id = ?",
+                (name, domain, tech_stack, status, website_id),
+            )
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "domain already exists"}), 400
+
+        set_website_tags(website_id, parse_tags(tag_text))
+        updated = query_db("SELECT * FROM websites WHERE id = ?", (website_id,), one=True)
+        payload = dict(updated)
+        payload["tags"] = get_website_tags(website_id)
+        return jsonify(payload)
+
+    @app.delete("/api/websites/<int:website_id>")
+    @login_required
+    def api_delete_website(website_id: int) -> Any:
+        website = get_owned_website(website_id)
+        if website is None:
+            return jsonify({"error": "website not found"}), 404
+        execute_db("DELETE FROM websites WHERE id = ?", (website_id,))
+        return jsonify({"ok": True})
 
     @app.get("/api/websites/<int:website_id>/pages")
     @login_required
@@ -824,6 +989,80 @@ def register_routes(app: Flask) -> None:
         )
         return jsonify([dict(row) for row in pages])
 
+    @app.post("/api/websites/<int:website_id>/pages")
+    @login_required
+    def api_create_page(website_id: int) -> Any:
+        website = get_owned_website(website_id)
+        if website is None:
+            return jsonify({"error": "website not found"}), 404
+
+        data = _read_request_data()
+        title = str(data.get("title", "")).strip()
+        slug = str(data.get("slug", "")).strip()
+        seo_description = str(data.get("seo_description", "")).strip()
+        content_markdown = str(data.get("content_markdown", "")).strip()
+        published = data.get("published", 0)
+        published_int = 1 if str(published).lower() in {"1", "true", "yes"} else 0
+
+        if not title or not slug:
+            return jsonify({"error": "title and slug are required"}), 400
+
+        try:
+            page_id = execute_db(
+                """
+                INSERT INTO pages (website_id, title, slug, seo_description, content_markdown, published)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (website_id, title, slug, seo_description, content_markdown, published_int),
+            )
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "slug must be unique per website"}), 400
+
+        page = query_db("SELECT * FROM pages WHERE id = ?", (page_id,), one=True)
+        return jsonify(dict(page)), 201
+
+    @app.put("/api/pages/<int:page_id>")
+    @login_required
+    def api_update_page(page_id: int) -> Any:
+        page = get_owned_page(page_id)
+        if page is None:
+            return jsonify({"error": "page not found"}), 404
+
+        data = _read_request_data()
+        title = str(data.get("title", page["title"])).strip()
+        slug = str(data.get("slug", page["slug"])).strip()
+        seo_description = str(data.get("seo_description", page["seo_description"] or "")).strip()
+        content_markdown = str(data.get("content_markdown", page["content_markdown"] or "")).strip()
+        published = data.get("published", page["published"])
+        published_int = 1 if str(published).lower() in {"1", "true", "yes"} else 0
+
+        if not title or not slug:
+            return jsonify({"error": "title and slug are required"}), 400
+
+        try:
+            execute_db(
+                """
+                UPDATE pages
+                SET title = ?, slug = ?, seo_description = ?, content_markdown = ?, published = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (title, slug, seo_description, content_markdown, published_int, page_id),
+            )
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "slug must be unique per website"}), 400
+
+        updated = query_db("SELECT * FROM pages WHERE id = ?", (page_id,), one=True)
+        return jsonify(dict(updated))
+
+    @app.delete("/api/pages/<int:page_id>")
+    @login_required
+    def api_delete_page(page_id: int) -> Any:
+        page = get_owned_page(page_id)
+        if page is None:
+            return jsonify({"error": "page not found"}), 404
+        execute_db("DELETE FROM pages WHERE id = ?", (page_id,))
+        return jsonify({"ok": True})
+
     @app.get("/api/websites/<int:website_id>/deployments")
     @login_required
     def api_deployments(website_id: int) -> Any:
@@ -835,3 +1074,73 @@ def register_routes(app: Flask) -> None:
             (website_id,),
         )
         return jsonify([dict(row) for row in deployments])
+
+    @app.post("/api/websites/<int:website_id>/deployments")
+    @login_required
+    def api_create_deployment(website_id: int) -> Any:
+        website = get_owned_website(website_id)
+        if website is None:
+            return jsonify({"error": "website not found"}), 404
+
+        data = _read_request_data()
+        provider = str(data.get("provider", "")).strip().lower()
+        project_name = str(data.get("project_name", "")).strip()
+        production_url = str(data.get("production_url", "")).strip()
+        preview_url = str(data.get("preview_url", "")).strip()
+        branch = str(data.get("branch", "")).strip()
+        status = str(data.get("status", "active")).strip() or "active"
+
+        if provider not in {"vercel", "netlify"}:
+            return jsonify({"error": "provider must be vercel or netlify"}), 400
+        if not project_name:
+            return jsonify({"error": "project_name is required"}), 400
+
+        deployment_id = execute_db(
+            """
+            INSERT INTO deployments (website_id, provider, project_name, production_url, preview_url, branch, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (website_id, provider, project_name, production_url, preview_url, branch, status),
+        )
+        deployment = query_db("SELECT * FROM deployments WHERE id = ?", (deployment_id,), one=True)
+        return jsonify(dict(deployment)), 201
+
+    @app.put("/api/deployments/<int:deployment_id>")
+    @login_required
+    def api_update_deployment(deployment_id: int) -> Any:
+        deployment = get_owned_deployment(deployment_id)
+        if deployment is None:
+            return jsonify({"error": "deployment not found"}), 404
+
+        data = _read_request_data()
+        provider = str(data.get("provider", deployment["provider"])).strip().lower()
+        project_name = str(data.get("project_name", deployment["project_name"])).strip()
+        production_url = str(data.get("production_url", deployment["production_url"] or "")).strip()
+        preview_url = str(data.get("preview_url", deployment["preview_url"] or "")).strip()
+        branch = str(data.get("branch", deployment["branch"] or "")).strip()
+        status = str(data.get("status", deployment["status"])).strip() or deployment["status"]
+
+        if provider not in {"vercel", "netlify"}:
+            return jsonify({"error": "provider must be vercel or netlify"}), 400
+        if not project_name:
+            return jsonify({"error": "project_name is required"}), 400
+
+        execute_db(
+            """
+            UPDATE deployments
+            SET provider = ?, project_name = ?, production_url = ?, preview_url = ?, branch = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (provider, project_name, production_url, preview_url, branch, status, deployment_id),
+        )
+        updated = query_db("SELECT * FROM deployments WHERE id = ?", (deployment_id,), one=True)
+        return jsonify(dict(updated))
+
+    @app.delete("/api/deployments/<int:deployment_id>")
+    @login_required
+    def api_delete_deployment(deployment_id: int) -> Any:
+        deployment = get_owned_deployment(deployment_id)
+        if deployment is None:
+            return jsonify({"error": "deployment not found"}), 404
+        execute_db("DELETE FROM deployments WHERE id = ?", (deployment_id,))
+        return jsonify({"ok": True})
